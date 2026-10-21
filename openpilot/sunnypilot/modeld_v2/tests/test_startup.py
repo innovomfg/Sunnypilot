@@ -1,4 +1,5 @@
 import ast
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -6,7 +7,38 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from openpilot.sunnypilot.modeld_v2.startup import load_model, wait_for_gpu_boot, gpu_link_ready
+from openpilot.sunnypilot.modeld_v2.startup import load_model, wait_for_gpu_boot, gpu_link_ready, configure_model_runtime, MODEL_RUNTIME_TARGETS
+
+
+class TestRuntimeTargets(unittest.TestCase):
+  def test_unset_target_is_explicit_and_qcom_first(self):
+    with patch.dict(os.environ, {}, clear=True), patch('openpilot.common.hardware.COMMA_HARDWARE', True):
+      configure_model_runtime()
+      self.assertEqual(os.environ['DEV'], MODEL_RUNTIME_TARGETS)
+      self.assertTrue(os.environ['DEV'].startswith('QCOM;'))
+
+  def test_blank_target_is_treated_as_automatic(self):
+    with patch.dict(os.environ, {'DEV': ' '}, clear=True), patch('openpilot.common.hardware.COMMA_HARDWARE', True):
+      configure_model_runtime()
+      self.assertEqual(os.environ['DEV'], MODEL_RUNTIME_TARGETS)
+
+  def test_explicit_target_preserved(self):
+    target = 'USB+AMD:LLVM:gfx1102;CPU:CLANG'
+    with patch.dict(os.environ, {'DEV': target}, clear=True), patch('openpilot.common.hardware.COMMA_HARDWARE', True):
+      configure_model_runtime()
+      self.assertEqual(os.environ['DEV'], target)
+
+  def test_pc_environment_unchanged(self):
+    with patch.dict(os.environ, {}, clear=True), patch('openpilot.common.hardware.COMMA_HARDWARE', False):
+      configure_model_runtime()
+      self.assertNotIn('DEV', os.environ)
+
+  def test_configuration_precedes_tinygrad_import(self):
+    tree = ast.parse((Path(__file__).parents[1] / 'modeld.py').read_text())
+    configure = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                     and isinstance(n.value.func, ast.Name) and n.value.func.id == 'configure_model_runtime')
+    tinygrad = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.ImportFrom) and n.module.startswith('tinygrad'))
+    self.assertLess(configure, tinygrad)
 
 
 class TestStartup(unittest.TestCase):

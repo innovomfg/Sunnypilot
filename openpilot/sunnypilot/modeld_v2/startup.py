@@ -1,5 +1,6 @@
 """Keep expensive startup work out of the real-time inference thread."""
 import math
+import os
 import time
 
 from openpilot.common.realtime import drop_realtime
@@ -7,6 +8,20 @@ from openpilot.common.realtime import drop_realtime
 GPU_BOOT_DELAY = 20.0
 GPU_BOOT_TIMEOUT = 60.0
 GPU_READY_STABLE = 2.0
+MODEL_RUNTIME_TARGETS = 'QCOM;USB+AMD:LLVM;CPU:CLANG'
+
+
+def configure_model_runtime():
+  """Set deterministic targets before tinygrad reads its process environment.
+
+  The default device must be QCOM while preloading the small model. Otherwise
+  implicit/default-device requests can probe AMD before the boot gate, leaving
+  a partially initialized USB interface locked when the big loader opens it.
+  Explicit operator targets and non-comma runtimes are left unchanged.
+  """
+  from openpilot.common.hardware import COMMA_HARDWARE
+  if COMMA_HARDWARE and not os.environ.get('DEV', '').strip():
+    os.environ['DEV'] = MODEL_RUNTIME_TARGETS
 
 
 def gpu_link_ready():

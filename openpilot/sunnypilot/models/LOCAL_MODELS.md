@@ -77,3 +77,12 @@ is separate. With no selected Chestnut model there is no boot wait. A readiness
 timeout uses the small model for that drive without a mid-drive retry or switch.
 Assistance is not available until modeld has finished startup. Importing the
 compiler's queue helpers no longer initializes the default GPU as a side effect.
+
+On comma hardware, when `DEV` is unset or blank, modeld sets
+`QCOM;USB+AMD:LLVM;CPU:CLANG` before importing tinygrad. QCOM remains the default
+while the small fallback is deserialized/warmed; AMD uses the USB interface and
+LLVM renderer when explicitly requested by the big loader after readiness.
+This avoids automatic device discovery probing AMD during small-model loading,
+which can retain a partial USB initialization/lock on a failed probe. Explicit
+operator-supplied `DEV` targets and PC environments are preserved. This does not
+remove USB mutual exclusion or reset a GPU owned by another process.

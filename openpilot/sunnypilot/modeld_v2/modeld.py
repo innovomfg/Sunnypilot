@@ -9,6 +9,8 @@ See the LICENSE.md file in the root directory for more details.
 from collections.abc import Callable
 import os
 os.environ['GMMU'] = '0'
+from openpilot.sunnypilot.modeld_v2.startup import configure_model_runtime
+configure_model_runtime()
 import numpy as np
 import threading
 import time
