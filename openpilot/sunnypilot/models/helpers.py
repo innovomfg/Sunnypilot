@@ -76,6 +76,9 @@ def _bundle_artifacts(bundle: custom.ModelManagerSP.ModelBundle) -> list[tuple[s
 
 
 def _bundle_is_valid_locally(bundle: custom.ModelManagerSP.ModelBundle) -> bool:
+  if bundle.ref.startswith("local:"):
+    from openpilot.sunnypilot.models.local import is_registered_local_bundle
+    return is_registered_local_bundle(bundle)
   model_root = Paths.model_root()
   return all(_verify_file(os.path.join(model_root, file_name), expected_hash)
              for file_name, expected_hash in _bundle_artifacts(bundle))
@@ -156,13 +159,17 @@ def _validate_active_bundle(params: Params, source: str, available_bundles: list
   if not raw_bundle:
     return
 
-  if _LAST_VALIDATED_RAW.get(key) == raw_bundle:
+  if _LAST_VALIDATED_RAW.get(key) == raw_bundle and not str(raw_bundle.get("ref", "")).startswith("local:"):
     return
 
   active_bundle = _parse_active_bundle(raw_bundle)
   if active_bundle is None or _bundle_needs_reset(active_bundle, available_bundles):
     cloudlog.warning(f"Active model bundle invalid for {source}; resetting to default")
-    params.remove(key)
+    if str(raw_bundle.get("ref", "")).startswith("local:"):
+      # Explicitly empty: legacy migration must not copy the small model here.
+      params.put(key, {}, block=True)
+    else:
+      params.remove(key)
     _LAST_VALIDATED_RAW[key] = None
   else:
     _LAST_VALIDATED_RAW[key] = raw_bundle

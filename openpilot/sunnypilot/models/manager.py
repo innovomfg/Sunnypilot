@@ -194,6 +194,12 @@ class ModelManagerSP:
         self._report_status()
         return
 
+      # Local builds have no remote fallback. Never overwrite or delete the
+      # only copy when verification fails; require an explicit re-registration.
+      from openpilot.sunnypilot.models.local import LOCAL_URI
+      if url.startswith(LOCAL_URI):
+        raise ValueError(f"Local model {filename} is missing or corrupt; rebuild or restore it")
+
       if len(artifact.chunks) > 0:
         await self._download_chunked(url, full_path, artifact, skip=valid_chunks)
         from openpilot.common.file_chunker import get_chunk_name
@@ -225,7 +231,10 @@ class ModelManagerSP:
 
     except Exception as e:
       cloudlog.error(f"Error downloading {filename}: {str(e)}")
-      for f in [full_path] + [p for p in (os.path.join(destination_path, f) for f in os.listdir(destination_path)) if filename in p]:
+      from openpilot.sunnypilot.models.local import LOCAL_URI
+      cleanup = [] if url.startswith(LOCAL_URI) else [full_path] + [os.path.join(destination_path, f)
+                                                                  for f in os.listdir(destination_path) if filename in f]
+      for f in cleanup:
         if os.path.isfile(f):  # noqa: ASYNC240
           os.remove(f)
       artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.failed
@@ -355,6 +364,10 @@ class ModelManagerSP:
     # Get list of files used by both slots' selected bundles (either may become
     # the truly active bundle depending on hardware availability)
     active_files = []
+    # Registered builds are irreplaceable cache entries, even when unselected.
+    from openpilot.sunnypilot.models.local import get_local_bundles
+    for bundle in get_local_bundles("chestnut"):
+      active_files.extend(model.artifact.fileName for model in bundle.models)
     for source in ACTIVE_BUNDLE_KEYS:
       if selected_bundle := get_selected_bundle(self.params, source):
         for model in selected_bundle.models:
@@ -366,7 +379,7 @@ class ModelManagerSP:
     try:
       for filename in os.listdir(model_dir):
         base = filename.split('.chunk')[0] if '.chunk' in filename else filename
-        if base not in active_files and filename not in active_files:
+        if base not in active_files and filename not in active_files and not filename.startswith("local-"):
           file_path = os.path.join(model_dir, filename)
           if os.path.isfile(file_path):
             os.remove(file_path)

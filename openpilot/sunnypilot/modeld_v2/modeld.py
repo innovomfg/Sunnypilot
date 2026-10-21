@@ -29,7 +29,7 @@ from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.realtime import config_realtime_process, DT_MDL
+from openpilot.common.realtime import config_realtime_process, drop_realtime, set_core_affinity, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.system import sentry
@@ -54,6 +54,7 @@ from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.modeld_v2.helpers import load_oob
 from openpilot.sunnypilot.models.helpers import get_active_bundle
+from openpilot.sunnypilot.modeld_v2.startup import load_model
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
@@ -110,6 +111,13 @@ class ModelState(ModelStateBase):
     self.MIN_LAT_CONTROL_SPEED = 0.3
     self.PLANPLUS_CONTROL: float = 1.0
     self.chestnut = chestnut
+
+    if model_bundle is not None and model_bundle.ref.startswith("local:"):
+      from tinygrad.device import Device
+      from openpilot.sunnypilot.models.local import check_local_model_target
+      if not chestnut:
+        raise ValueError("Local Chestnut model cannot run in the small-model slot")
+      check_local_model_target(model_bundle, Device['AMD'].arch)
 
     pkl_path = _find_driving_pkl(model_bundle)
     assert pkl_path is not None, f"No driving pkl found for {'chestnut' if chestnut else 'small model'} — all models must be compiled with compile_modeld.py"
@@ -317,12 +325,15 @@ class ModelState(ModelStateBase):
 
 
 def main(demo=False):
+  # Model deserialization, device initialization and warmup can take minutes.
+  # Never run those operations with FIFO priority (including inherited priority).
+  drop_realtime()
+  set_core_affinity([7])
   cloudlog.warning("modeld init")
 
   sentry.set_tag("daemon", PROCESS_NAME)
   cloudlog.bind(daemon=PROCESS_NAME)
   setproctitle(PROCESS_NAME)
-  config_realtime_process(7, 54)
 
   CHESTNUT = chestnut_present()
   if CHESTNUT:
@@ -364,9 +375,7 @@ def main(demo=False):
     def load_big():
       nonlocal big_model
       try:
-        m = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=True)
-        m.warmup()
-        big_model = m
+        big_model = load_model(ModelState, cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=True)
       except Exception:
         cloudlog.exception("chestnut load failed")
     loader = threading.Thread(target=load_big, daemon=True)
@@ -379,7 +388,8 @@ def main(demo=False):
     if model is not None:
       params.remove("ChestnutModelError")
 
-  small_model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=False) if model is None or CHESTNUT else None
+  small_model = load_model(ModelState, cam_w=vipc_client_main.width, cam_h=vipc_client_main.height,
+                           chestnut=False) if model is None or CHESTNUT else None
   if model is None:
     model = small_model
   params.put_bool("ChestnutLoading", False)
@@ -423,6 +433,8 @@ def main(demo=False):
   meta_constants = load_meta_constants()
   RELC = RoadEdgeLaneChangeController()
 
+  # Only the initialized frame-processing thread needs real-time scheduling.
+  config_realtime_process(7, 54)
   while True:
     # Keep receiving frames until we are at least 1 frame ahead of previous extra frame
     while meta_main.timestamp_sof < meta_extra.timestamp_sof + 25000000:

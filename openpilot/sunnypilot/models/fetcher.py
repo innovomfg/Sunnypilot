@@ -205,6 +205,10 @@ class ModelFetcher:
     return not any(bundle.get("is_big") is True for bundle in bundles)
 
   def get_bundles_for_source(self, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
+    from openpilot.sunnypilot.models.local import get_local_bundles
+    return self._get_remote_bundles_for_source(source) + get_local_bundles(source)
+
+  def _get_remote_bundles_for_source(self, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
     if source not in self.MODEL_SOURCES:
       cloudlog.warning(f"Unknown model source: {source}")
       return []
@@ -245,6 +249,11 @@ class ModelFetcher:
 
 
 def get_cached_bundles(params: Params, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
+  from openpilot.sunnypilot.models.local import get_local_bundles
+  return _get_cached_remote_bundles(params, source) + get_local_bundles(source)
+
+
+def _get_cached_remote_bundles(params: Params, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
 
   if source not in ModelFetcher.MODEL_SOURCES:
     cloudlog.warning(f"Unknown model source: {source}")
