@@ -66,3 +66,14 @@ Model initialization and warmup run at normal scheduling priority. FIFO priority
 is applied only immediately before the modeld frame loop. Loader threads drop
 inherited real-time priority explicitly. Do not disable RT throttling/watchdogs
 to work around initialization stalls.
+
+When a Chestnut model is selected, modeld preloads the small fallback, gives
+external GPU power a 20-second grace period from modeld startup, and requires
+the expected 5 Gb/s USB adapter plus a stable PCIe L0 link for 2 seconds before
+opening AMD or warming the big model. Camera setup and small-model preload
+count toward the grace period. Readiness has a 60-second total budget (plus at
+most one bounded USB probe); the existing 60-second model load/warmup timeout
+is separate. With no selected Chestnut model there is no boot wait. A readiness
+timeout uses the small model for that drive without a mid-drive retry or switch.
+Assistance is not available until modeld has finished startup. Importing the
+compiler's queue helpers no longer initializes the default GPU as a side effect.

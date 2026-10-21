@@ -17,7 +17,6 @@ from tinygrad.tensor import Tensor
 
 import openpilot.cereal.messaging as messaging
 from openpilot.common.hardware import COMMA_HARDWARE
-from openpilot.selfdrive.modeld.helpers import chestnut_present
 from openpilot.cereal import log
 from opendbc.car.structs import car
 from openpilot.cereal.services import SERVICE_LIST
@@ -53,8 +52,8 @@ from openpilot.sunnypilot.modeld_v2.compile_modeld import (derive_frame_skip, ma
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.modeld_v2.helpers import load_oob
-from openpilot.sunnypilot.models.helpers import get_active_bundle
-from openpilot.sunnypilot.modeld_v2.startup import load_model
+from openpilot.sunnypilot.models.helpers import get_active_bundle, get_selected_bundle
+from openpilot.sunnypilot.modeld_v2.startup import load_model, wait_for_gpu_boot, GPU_BOOT_DELAY, GPU_BOOT_TIMEOUT
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
@@ -329,18 +328,17 @@ def main(demo=False):
   # Never run those operations with FIFO priority (including inherited priority).
   drop_realtime()
   set_core_affinity([7])
+  startup_started = time.monotonic()
   cloudlog.warning("modeld init")
 
   sentry.set_tag("daemon", PROCESS_NAME)
   cloudlog.bind(daemon=PROCESS_NAME)
   setproctitle(PROCESS_NAME)
 
-  CHESTNUT = chestnut_present()
-  if CHESTNUT:
-    os.environ['HCQDEV_WAIT_TIMEOUT_MS'] = '3000'
-
   params = Params()
-  params.put_bool("ChestnutLoading", CHESTNUT)
+  chestnut_requested = COMMA_HARDWARE and get_selected_bundle(params, "chestnut") is not None
+  CHESTNUT = False
+  params.put_bool("ChestnutLoading", chestnut_requested)
   params.remove("ChestnutActive")
 
   # visionipc clients
@@ -369,6 +367,18 @@ def main(demo=False):
   cloudlog.warning("loading model")
   st = time.monotonic()
 
+  # Prepare fallback without touching AMD, while external GPU power settles.
+  small_model = load_model(ModelState, cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=False)
+  if chestnut_requested:
+    cloudlog.warning(f"waiting for GPU boot: {GPU_BOOT_DELAY:.0f}s grace, {GPU_BOOT_TIMEOUT:.0f}s total readiness budget")
+    CHESTNUT = wait_for_gpu_boot(started_at=startup_started)
+    if not CHESTNUT:
+      cloudlog.warning("GPU boot readiness timed out; using the small model for this drive")
+      params.put_bool("ChestnutModelError", True)
+      params.put_bool("ChestnutActive", False)
+  if CHESTNUT:
+    os.environ['HCQDEV_WAIT_TIMEOUT_MS'] = '3000'
+
   model = None
   if CHESTNUT:
     big_model = None
@@ -388,8 +398,6 @@ def main(demo=False):
     if model is not None:
       params.remove("ChestnutModelError")
 
-  small_model = load_model(ModelState, cam_w=vipc_client_main.width, cam_h=vipc_client_main.height,
-                           chestnut=False) if model is None or CHESTNUT else None
   if model is None:
     model = small_model
   params.put_bool("ChestnutLoading", False)
